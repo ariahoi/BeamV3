@@ -5,9 +5,6 @@ const POINTS = 400; // Increased resolution for smoother charts
 export const calculateReactions = (state: BeamState): Reactions => {
   const { loads, type, supportA, supportB, length } = state;
   
-  let totalForce = 0; // Downward positive for calculation sum, but usually reactions oppose loads
-  let sumMomentsAboutA = 0; // For Simple/Cantilever-Left
-
   // Helper to get force and moment contribution of a load about a point
   const analyzeLoad = (pivot: number) => {
       let force = 0;
@@ -111,13 +108,6 @@ export const calculateDiagrams = (state: BeamState): CalculationResult[] => {
                 shear += reactions.Ra;
                 moment += reactions.Ra * (x - supportA);
                 moment -= reactions.Ma; // Reaction moment at wall (CCW reaction usually creates Hogging/Negative moment on beam?)
-                // Let's verify sign convention. 
-                // If loads are Down, Ra is Up. Ma prevents rotation.
-                // Beam sags (frowns) or smiles? Cantilever with down load frowns (Hogging, Negative M).
-                // Ra(Up) * x creates Sagging (+).
-                // We need a term to make total M negative.
-                // If Reaction Ma is calculated as Load * L. 
-                // M(x) = Ra*x - Ma - Load*(x-a)... 
             }
         }
         // For cantilever-right, reactions are at L. Since we scan 0->L, we never pass the support until the end.
@@ -178,14 +168,6 @@ export const calculateDiagrams = (state: BeamState): CalculationResult[] => {
         
         cumTheta += (avgM / EI) * dx;
         
-        // Trapz for Y using the new theta
-        // y_next = y_prev + avg_theta * dx
-        // We need theta at mid-interval roughly
-        const thetaPrev = i === 1 ? 0 : integration[i-1].theta; // this is actually just cumTheta accumulation
-        const avgTheta = (integration[i-1].theta + cumTheta) / 2; 
-        
-        // Refined:
-        // y[i] = y[i-1] + theta[i-1]*dx + 0.5*(dTheta)*dx?
         // Simpler: y += theta * dx
         cumY += cumTheta * dx;
 
