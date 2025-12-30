@@ -1,153 +1,77 @@
 import { BeamState, CalculationResult, Reactions } from '../types';
 
-const POINTS = 200; // Resolution of the calculation
+const POINTS = 400; // Increased resolution for smoother charts
 
 export const calculateReactions = (state: BeamState): Reactions => {
   const { loads, type, supportA, supportB, length } = state;
   
-  // 1. Calculate Equivalent Forces and Moments from Loads
-  // Convention:
-  // Forces: Up is Positive (+), Down is Negative (-) in statics equations.
-  // Note: Input 'value' for Point/Dist load is usually Magnitude. We assume input > 0 is Downward force.
-  // Moments: Counter-Clockwise (CCW) is Positive (+).
-  
-  let totalLoadForce = 0; // Sum of downward forces
-  let totalLoadMomentAtZero = 0; // Sum of moments caused by loads relative to x=0 (CCW positive)
+  let totalForce = 0; // Downward positive for calculation sum, but usually reactions oppose loads
+  let sumMomentsAboutA = 0; // For Simple/Cantilever-Left
 
-  loads.forEach(load => {
-    if (load.type === 'point') {
-      const F = load.value; // Downward magnitude
-      // Moment by downward force at pos x: -F * x
-      totalLoadForce += F;
-      totalLoadMomentAtZero -= F * load.position;
-    } else if (load.type === 'distributed' && load.length) {
-      const F = load.value * load.length; // Total downward force
-      const center = load.position + load.length / 2;
-      totalLoadForce += F;
-      totalLoadMomentAtZero -= F * center;
-    } else if (load.type === 'moment') {
-      // Input value > 0 is CCW moment
-      totalLoadMomentAtZero += load.value;
-    }
-  });
+  // Helper to get force and moment contribution of a load about a point
+  const analyzeLoad = (pivot: number) => {
+      let force = 0;
+      let moment = 0;
 
-  // 2. Solve Equilibrium Equations based on Beam Type
-  
+      loads.forEach(load => {
+          if (load.type === 'point') {
+              // Force
+              force += load.value;
+              // Moment = Force * distance
+              moment += load.value * (load.position - pivot);
+          } else if (load.type === 'distributed' && load.length) {
+              const F = load.value * load.length;
+              const center = load.position + load.length / 2;
+              force += F;
+              moment += F * (center - pivot);
+          } else if (load.type === 'moment') {
+              // Pure moment adds directly (taking sign convention into account)
+              // Convention: CCW +
+              // If input value is kNm (usually defined as CCW is positive in structural mechanics, or Sagging)
+              // Here we assume input value > 0 is CCW.
+              moment -= load.value; // Note: In static equilibrium Sum M = 0. 
+          }
+      });
+      return { force, moment };
+  };
+
   if (type === 'simple') {
-    // Two supports: A and B.
-    // Eq 1: Ra + Rb - TotalLoadForce = 0  => Ra + Rb = TotalLoadForce
-    // Eq 2: Sum Moments about A = 0
-    // M_Ra(0) + M_Rb(dist) + M_loads_about_A = 0
-    
-    // It's easier to sum moments about x=0 global:
-    // Ra * supportA + Rb * supportB + totalLoadMomentAtZero = 0
-    
-    // From Eq 1: Ra = TotalLoadForce - Rb. Substitute into Moment Eq:
-    // (TotalLoadForce - Rb) * supportA + Rb * supportB + totalLoadMomentAtZero = 0
-    // TotalLoadForce*A - Rb*A + Rb*B + M_loads = 0
-    // Rb * (B - A) = -M_loads - TotalLoadForce*A
-    // Rb = -(M_loads + TotalLoadForce*A) / (B - A)
-    
-    const dist = supportB - supportA;
-    if (Math.abs(dist) < 1e-4) return { Ra: 0, Rb: 0, Ma: 0 };
+      // Sum Moments about A = 0 => Rb * (B-A) - SumLoadMomentsAboutA = 0
+      const loadAnalysis = analyzeLoad(supportA);
+      
+      const dist = supportB - supportA;
+      if (Math.abs(dist) < 1e-4) return { Ra: 0, Rb: 0, Ma: 0 };
 
-    const Rb = -(totalLoadMomentAtZero + (-totalLoadForce * supportA)) / dist; // Note: totalLoadForce is magnitude of downward, needs to be treated as Force vector = -totalLoadForce in formula? 
-    // Let's re-verify signs.
-    // Let Force vector F_load = -totalLoadForce (downward).
-    // Moment M_load_0 = totalLoadMomentAtZero.
-    // Ra*A + Rb*B + M_load_0 = 0
-    // Ra + Rb + F_load = 0  => Ra + Rb = totalLoadForce (magnitude)
-    
-    // Actually, let's stick to the simplest Statics Method of Moments about Support A:
-    // Sum M_A = 0 (CCW +)
-    // Rb * (B - A) + Sum(Moment_Loads_About_A) = 0
-    
-    let sumMomentsAboutA = 0;
-    loads.forEach(load => {
-        if (load.type === 'point') {
-            // Downward force F at dist d from A creates CW moment: -F*d
-            const d = load.position - supportA;
-            sumMomentsAboutA -= load.value * d;
-        } else if (load.type === 'distributed' && load.length) {
-            const F = load.value * load.length;
-            const center = load.position + load.length/2;
-            const d = center - supportA;
-            sumMomentsAboutA -= F * d;
-        } else if (load.type === 'moment') {
-            sumMomentsAboutA += load.value;
-        }
-    });
+      // Rb * dist = SumLoadMoments
+      const Rb = loadAnalysis.moment / dist;
+      const Ra = loadAnalysis.force - Rb;
 
-    const reactionB = -sumMomentsAboutA / dist;
-    const reactionA = totalLoadForce - reactionB;
-    
-    return { Ra: reactionA, Rb: reactionB, Ma: 0 };
+      return { Ra, Rb, Ma: 0 };
 
   } else if (type === 'cantilever-left') {
-    // Fixed at Support A.
-    // Sigma F_y = 0 => Ra - TotalDownwardForce = 0 => Ra = TotalDownwardForce
-    // Sigma M_A = 0 => Ma + Sum(Moment_Loads_About_A) = 0 => Ma = -Sum(Moment_Loads_About_A)
-    
-    const Ra = totalLoadForce;
-    
-    let sumMomentsAboutA = 0;
-    loads.forEach(load => {
-        if (load.type === 'point') {
-            sumMomentsAboutA -= load.value * (load.position - supportA);
-        } else if (load.type === 'distributed' && load.length) {
-            const F = load.value * load.length;
-            const center = load.position + load.length/2;
-            sumMomentsAboutA -= F * (center - supportA);
-        } else if (load.type === 'moment') {
-            sumMomentsAboutA += load.value;
-        }
-    });
-
-    return { Ra, Rb: 0, Ma: -sumMomentsAboutA };
+      // Fixed at A.
+      // Ra = Total Load
+      // Ma = Moment at wall to counteract load moments
+      const loadAnalysis = analyzeLoad(supportA);
+      
+      return { 
+          Ra: loadAnalysis.force, 
+          Rb: 0, 
+          Ma: loadAnalysis.moment // Reaction moment
+      };
   } else {
-    // Cantilever Right (Fixed at Length)
-    // Support is considered at 'length' (or supportA if we used that prop, but UI assumes L)
-    // Let's assume the fixity is at x = length.
-    
-    const Ra = totalLoadForce; // Vertical reaction at wall (usually called Rb if at right, but we store in Ra for simplicity or map to proper var)
-    // Actually, let's allow Rb to be the right support reaction.
-    
-    // Sigma M_Wall = 0 (Wall is at L)
-    // M_wall + Sum(Moment_Loads_About_L) = 0
-    
-    let sumMomentsAboutWall = 0;
-    const wallX = length;
-    
-    loads.forEach(load => {
-        // Look at forces to the LEFT of wall.
-        // Downward force F at dist (L-pos) from wall creates CCW moment (Positive).
-        // Wait, standard convention: Force at x, pivot at L. Lever arm r = (x - L).
-        // Torque = r x F. 
-        // Force is down (-F). r is negative. Cross product usually results in Positive (CCW) moment for force to the left pushing down?
-        // Let's visualize: Wall at right. Load at left pushing down. This rotates beam CCW around wall. Correct. Positive moment.
-        
-        if (load.type === 'point') {
-            sumMomentsAboutWall += load.value * (wallX - load.position);
-        } else if (load.type === 'distributed' && load.length) {
-            const F = load.value * load.length;
-            const center = load.position + load.length/2;
-            sumMomentsAboutWall += F * (wallX - center);
-        } else if (load.type === 'moment') {
-            sumMomentsAboutWall += load.value;
-        }
-    });
-    
-    // M_wall = -SumMoments
-    // We store this in Ma for the data structure, but physically it's at B. 
-    // However, to keep our integrator simple (which usually sweeps left-to-right), 
-    // it's easier to calculate internal forces by cutting.
-    
-    return { Ra: 0, Rb: Ra, Ma: -sumMomentsAboutWall }; // Storing Moment reaction in Ma slot is confusing. Let's strictly use the result object in integrator.
-    // We will use Ma for left wall moment, and we need a way to pass right wall moment. 
-    // For now, let's adhere to the types. Reactions interface has Ma. We can reuse it or rely on Rb and statics in the integrator.
-    // Actually, for Cantilever Right, we don't strictly need the wall moment to calculate Shear/Moment diagrams if we scan from Left to Right (Free end to Fixed end).
-    // If we scan Left->Right, V=0, M=0 at start. Accumulate loads.
-    // The mismatch at the end is the reaction.
+      // Cantilever Right (Fixed at Length)
+      // We calculate reactions at the wall (Right side)
+      // For the purpose of the diagram integrator scanning Left->Right, 
+      // we don't strictly need Ra/Ma at the start (0), because the wall is at the end.
+      // However, for completeness:
+      const loadAnalysis = analyzeLoad(length);
+      
+      return {
+          Ra: 0,
+          Rb: loadAnalysis.force, // Vertical reaction at right wall
+          Ma: loadAnalysis.moment // Moment reaction at right wall
+      };
   }
 };
 
@@ -155,68 +79,59 @@ export const calculateDiagrams = (state: BeamState): CalculationResult[] => {
     const { length, loads, type, supportA, supportB, material, profile, customI } = state;
     const reactions = calculateReactions(state);
     
-    const I_m4 = (customI || profile.I) / 100000000; // cm4 to m4
-    const E_kpa = material.E * 1000000; // GPa to kPa
+    // Stiffness EI
+    const I_m4 = (customI || profile.I) / 100000000; // cm^4 to m^4
+    const E_kpa = material.E * 1000000; // GPa to kPa (kN/m^2)
     const EI = E_kpa * I_m4;
 
     const dx = length / POINTS;
     const results: CalculationResult[] = [];
-    
-    // We integrate differential equations or use Method of Sections from x=0 to L
+
+    // Integration approach: Scan from x=0 to L
+    // Calculate Shear (V) and Moment (M) at each section x by summing forces/moments to the LEFT.
     
     for (let i = 0; i <= POINTS; i++) {
         const x = i * dx;
-        let shear = 0; // Upward internal shear is positive on Left face? 
-        // Standard Beam Sign Convention:
-        // Shear V: Positive when it pushes the left section Up.
-        // Moment M: Positive when it compresses the top fiber (Sagging).
-        
-        // V(x) = Sum of Forces to the left (Upward reactions - Downward loads)
-        // M(x) = Sum of Moments to the left (Reaction moments + Force moments)
-        
-        // 1. Reactions to the left
+        let shear = 0;
+        let moment = 0;
+
+        // 1. Add Reactions (if they are to the left of x)
         if (type === 'simple') {
             if (x > supportA) {
                 shear += reactions.Ra;
-                momentFromForce(reactions.Ra, supportA, x);
+                moment += reactions.Ra * (x - supportA);
             }
             if (x > supportB) {
                 shear += reactions.Rb;
-                momentFromForce(reactions.Rb, supportB, x);
+                moment += reactions.Rb * (x - supportB);
             }
         } else if (type === 'cantilever-left') {
-             // Fixed at A.
-             if (x > supportA) {
-                 shear += reactions.Ra;
-                 // Moment Reaction at A (Ma). If Ma is positive (CCW), it adds directly to internal moment (Sagging).
-                 // Wait, Internal Moment M = M_ext_reaction + ...
-                 // If Wall applies CCW moment, it bends beam Up (Sagging). So +Ma.
-                 // Reactions.Ma calculated above opposes loads.
-                 // Example: Load Down (-). Ma will be Positive (CCW). This creates sagging.
-                 
-                 // We need to be careful with x near 0.
-                 // Internal Moment at x=0+ is Ma.
-                 
-                 // Add Moment Reaction
-                 // M(x) includes the concentrated moment at the support
-                 // Note: Our reactions.Ma is the reaction BY the wall ON the beam.
-                 shear += reactions.Ra; // Ra is vertical force by wall
-                 momentFromForce(reactions.Ra, supportA, x);
-                 addMoment(reactions.Ma); 
-             }
+            // Support is at A (usually 0)
+            if (x > supportA) {
+                shear += reactions.Ra;
+                moment += reactions.Ra * (x - supportA);
+                moment -= reactions.Ma; // Reaction moment at wall (CCW reaction usually creates Hogging/Negative moment on beam?)
+                // Let's verify sign convention. 
+                // If loads are Down, Ra is Up. Ma prevents rotation.
+                // Beam sags (frowns) or smiles? Cantilever with down load frowns (Hogging, Negative M).
+                // Ra(Up) * x creates Sagging (+).
+                // We need a term to make total M negative.
+                // If Reaction Ma is calculated as Load * L. 
+                // M(x) = Ra*x - Ma - Load*(x-a)... 
+            }
         }
-        
-        // 2. Loads to the left
+        // For cantilever-right, reactions are at L. Since we scan 0->L, we never pass the support until the end.
+        // So internal forces are just due to loads. This is correct.
+
+        // 2. Add Loads (if they are to the left of x)
         loads.forEach(load => {
             if (load.type === 'point') {
                 if (x > load.position) {
-                    shear -= load.value; // Downward load reduces shear
-                    momentFromForce(-load.value, load.position, x);
+                    shear -= load.value; // Downward load decreases shear
+                    moment -= load.value * (x - load.position); // Downward load creates Hogging (-)
                 }
             } else if (load.type === 'distributed' && load.length) {
                 if (x > load.position) {
-                    // Dist load w starts at P.
-                    // Active portion is from P to min(x, P+L).
                     const start = load.position;
                     const end = Math.min(x, start + load.length);
                     const distLen = end - start;
@@ -224,76 +139,15 @@ export const calculateDiagrams = (state: BeamState): CalculationResult[] => {
                     if (distLen > 0) {
                         const forceChunk = load.value * distLen;
                         shear -= forceChunk;
-                        // Centroid of this chunk
                         const centroid = start + distLen / 2;
-                        momentFromForce(-forceChunk, centroid, x);
+                        moment -= forceChunk * (x - centroid);
                     }
                 }
             } else if (load.type === 'moment') {
                 if (x > load.position) {
-                     // Concentrated moment input.
-                     // If input is CCW (+), it adds to internal moment directly?
-                     // Standard convention: Clockwise External Moment on left section is Positive internal M? No.
-                     // Let's stick to: Internal M = Sum Moments of Left forces/moments about section cut.
-                     // CCW Moment at x < Cut adds Positive M.
-                     addMoment(load.value);
-                }
-            }
-        });
-
-        function momentFromForce(F: number, pos: number, cutX: number) {
-             // Force F at pos. Cut at cutX. Lever arm = cutX - pos.
-             // Moment = F * arm.
-             // If F is Up (+), Moment is Positive (Sagging).
-             // If F is Down (-), Moment is Negative (Hogging).
-             addMoment(F * (cutX - pos));
-        }
-
-        function addMoment(m: number) {
-            // Helper to sum moments to a local var before pushing
-            // We can't access 'moment' var directly inside forEach easily without scope.
-            // Implemented via closure or separate variable logic.
-            // Let's rewrite the loop structure slightly to allow direct var access.
-        }
-        
-        // Re-implementing summation inline for clarity
-        let M_internal = 0;
-        
-        // Apply Reactions
-         if (type === 'simple') {
-            if (x >= supportA) {
-                M_internal += reactions.Ra * (x - supportA);
-            }
-            if (x >= supportB) {
-                M_internal += reactions.Rb * (x - supportB);
-            }
-        } else if (type === 'cantilever-left') {
-             if (x >= supportA) {
-                 M_internal += reactions.Ra * (x - supportA);
-                 M_internal += reactions.Ma;
-             }
-        }
-        
-        // Apply Loads
-        loads.forEach(load => {
-             if (load.type === 'point') {
-                if (x > load.position) {
-                    M_internal -= load.value * (x - load.position);
-                }
-            } else if (load.type === 'distributed' && load.length) {
-                if (x > load.position) {
-                    const start = load.position;
-                    const end = Math.min(x, start + load.length);
-                    const distLen = end - start;
-                    if (distLen > 0) {
-                        const forceChunk = load.value * distLen;
-                        const centroid = start + distLen / 2;
-                        M_internal -= forceChunk * (x - centroid);
-                    }
-                }
-            } else if (load.type === 'moment') {
-                if (x > load.position) {
-                     M_internal += load.value;
+                    // Concentrated Moment
+                    // Convention: Counter-Clockwise external moment adds to Internal Moment
+                    moment += load.value; 
                 }
             }
         });
@@ -301,95 +155,89 @@ export const calculateDiagrams = (state: BeamState): CalculationResult[] => {
         results.push({
             x,
             shear,
-            moment: M_internal,
+            moment,
             slope: 0,
             deflection: 0
         });
     }
 
-    // 2. Integration for Slope and Deflection using Moment-Area method or trapezoidal integration
-    let theta = 0;
-    let y = 0;
-    const integrationData = [];
+    // Double integration method for Slope and Deflection
+    // M = EI * d2y/dx2
+    // Theta = Integral(M/EI) + C1
+    // Y = Integral(Theta) + C2
 
-    // Integrate M/EI to get Theta (Slope)
-    // Integrate Theta to get Y (Deflection)
-    for (let i = 0; i <= POINTS; i++) {
-         if (i === 0) {
-             integrationData.push({ theta: 0, y: 0 });
-         } else {
-             const mPrev = results[i-1].moment;
-             const mCurr = results[i].moment;
-             const avgM = (mPrev + mCurr) / 2;
-             
-             theta += avgM * dx;
-             
-             const tPrev = integrationData[i-1].theta;
-             const tCurr = theta;
-             const avgT = (tPrev + tCurr) / 2;
-             
-             y += avgT * dx;
-             
-             integrationData.push({ theta, y });
-         }
+    // 1. First Pass: Numerical Integration
+    const integration = new Array(results.length).fill({ theta: 0, y: 0 });
+    let cumTheta = 0;
+    let cumY = 0;
+
+    for (let i = 1; i < results.length; i++) {
+        const mPrev = results[i-1].moment;
+        const mCurr = results[i].moment;
+        const avgM = (mPrev + mCurr) / 2;
+        
+        cumTheta += (avgM / EI) * dx;
+        
+        // Trapz for Y using the new theta
+        // y_next = y_prev + avg_theta * dx
+        // We need theta at mid-interval roughly
+        const thetaPrev = i === 1 ? 0 : integration[i-1].theta; // this is actually just cumTheta accumulation
+        const avgTheta = (integration[i-1].theta + cumTheta) / 2; 
+        
+        // Refined:
+        // y[i] = y[i-1] + theta[i-1]*dx + 0.5*(dTheta)*dx?
+        // Simpler: y += theta * dx
+        cumY += cumTheta * dx;
+
+        integration[i] = { theta: cumTheta, y: cumY };
     }
 
-    // 3. Boundary Conditions (C1 and C2)
-    // Y_final(x) = (1/EI) * ( y_int(x) + C1*x + C2 )
-    
+    // 2. Calculate Constants C1 and C2 based on Boundary Conditions
     let C1 = 0;
     let C2 = 0;
 
+    const getIdx = (pos: number) => Math.min(Math.max(Math.round(pos / dx), 0), POINTS);
+
     if (type === 'cantilever-left') {
-        // y(0) = 0, theta(0) = 0 (assuming supportA is at 0, or shift logic)
-        // If integration started at 0 and support is at 0:
-        // C1 = -theta(0) = 0
-        // C2 = -y(0) = 0
-        // But supportA might be offset? Let's strictly use supportA index.
-        const idx = Math.min(Math.max(Math.round(supportA/dx), 0), POINTS);
-        const val = integrationData[idx];
-        
-        // Theta_actual(A) = (val.theta + C1)/EI = 0 => C1 = -val.theta
-        C1 = -val.theta;
-        // Y_actual(A) = (val.y + C1*A + C2)/EI = 0 => C2 = -val.y - C1*A
-        C2 = -val.y - C1 * supportA;
-        
+        // Fixed at A (usually 0). y=0, theta=0 at x=supportA
+        const idx = getIdx(supportA);
+        // Theta_final = intTheta + C1. At supportA, 0 = intTheta[idx] + C1 => C1 = -intTheta[idx]
+        C1 = -integration[idx].theta;
+        // Y_final = intY + C1*x + C2. At supportA, 0 = intY[idx] + C1*A + C2
+        C2 = -integration[idx].y - C1 * supportA;
+
     } else if (type === 'cantilever-right') {
-        // Fixed at L. y(L)=0, theta(L)=0.
-        const val = integrationData[POINTS]; // last point
-        C1 = -val.theta;
-        C2 = -val.y - C1 * length;
-        
+        // Fixed at L. y=0, theta=0 at x=L
+        const idx = POINTS; // End
+        C1 = -integration[idx].theta;
+        C2 = -integration[idx].y - C1 * length;
+
     } else if (type === 'simple') {
-        // y(A) = 0, y(B) = 0
-        const idxA = Math.min(Math.max(Math.round(supportA/dx), 0), POINTS);
-        const idxB = Math.min(Math.max(Math.round(supportB/dx), 0), POINTS);
+        // y=0 at A, y=0 at B
+        const idxA = getIdx(supportA);
+        const idxB = getIdx(supportB);
         
-        const yA = integrationData[idxA].y;
-        const yB = integrationData[idxB].y;
-        
-        // System:
-        // yA + C1*A + C2 = 0
-        // yB + C1*B + C2 = 0
-        // (yB - yA) + C1*(B-A) = 0 => C1 = (yA - yB) / (B - A)
-        
+        const y_int_A = integration[idxA].y;
+        const y_int_B = integration[idxB].y;
+
+        // Eq1: y_int_A + C1*A + C2 = 0
+        // Eq2: y_int_B + C1*B + C2 = 0
+        // Subtract: (y_int_B - y_int_A) + C1*(B - A) = 0
         if (Math.abs(supportB - supportA) > 1e-4) {
-             C1 = (yA - yB) / (supportB - supportA);
-             C2 = -yA - C1 * supportA;
+            C1 = -(y_int_B - y_int_A) / (supportB - supportA);
+            C2 = -y_int_A - C1 * supportA;
         }
     }
 
-    // Finalize
-    for (let i = 0; i <= POINTS; i++) {
-        const item = integrationData[i];
-        results[i].slope = (item.theta + C1) / EI;
-        // Deflection in mm
-        results[i].deflection = ((item.y + C1 * results[i].x + C2) / EI) * 1000;
+    // 3. Finalize Results
+    for (let i = 0; i < results.length; i++) {
+        results[i].slope = integration[i].theta + C1;
+        results[i].deflection = (integration[i].y + C1 * results[i].x + C2) * 1000; // Convert m to mm
         
-        // Fix practically zero values to strictly 0 for clean charts
-        if (Math.abs(results[i].shear) < 1e-5) results[i].shear = 0;
-        if (Math.abs(results[i].moment) < 1e-5) results[i].moment = 0;
-        if (Math.abs(results[i].deflection) < 1e-5) results[i].deflection = 0;
+        // Zero out mostly-zero values to prevent scientific notation in UI (e.g. 1e-15)
+        if (Math.abs(results[i].shear) < 1e-3) results[i].shear = 0;
+        if (Math.abs(results[i].moment) < 1e-3) results[i].moment = 0;
+        if (Math.abs(results[i].deflection) < 1e-3) results[i].deflection = 0;
     }
 
     return results;
