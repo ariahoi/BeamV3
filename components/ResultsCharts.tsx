@@ -6,7 +6,7 @@ interface Props {
   data: CalculationResult[];
 }
 
-const ChartContainer = ({ title, dataKey, data, color, unit, fill }: any) => (
+const ChartContainer = ({ title, dataKey, data, color, unit }: any) => (
   <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm h-64 flex flex-col">
     <div className="flex justify-between items-center mb-2 px-2">
       <h3 className="text-sm font-semibold text-slate-700">{title}</h3>
