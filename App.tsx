@@ -5,7 +5,7 @@ import { calculateDiagrams, calculateReactions } from './utils/beamCalculator';
 import { BeamVisualizer } from './components/BeamVisualizer';
 import { ResultsCharts } from './components/ResultsCharts';
 import { Controls } from './components/Controls';
-import { Calculator, ShieldCheck, AlertTriangle, ArrowRight } from 'lucide-react';
+import { Calculator, ShieldCheck, AlertTriangle, ArrowRight, RotateCcw } from 'lucide-react';
 
 const App: React.FC = () => {
   const [beamState, setBeamState] = useState<BeamState>({
@@ -62,6 +62,21 @@ const App: React.FC = () => {
     }));
     setSelectedLoadId(null);
   };
+  
+  const handleReset = () => {
+      if (confirm('Clear all loads and reset geometry?')) {
+        setBeamState({
+            length: DEFAULT_BEAM_LENGTH,
+            type: 'simple',
+            supportA: 0,
+            supportB: DEFAULT_BEAM_LENGTH,
+            loads: [],
+            material: MATERIALS[0],
+            profile: PROFILES[2],
+        });
+        setSelectedLoadId(null);
+      }
+  };
 
   return (
     <div className="min-h-screen flex flex-col bg-slate-50/50 text-slate-900 font-sans">
@@ -77,9 +92,15 @@ const App: React.FC = () => {
               <p className="text-[10px] text-slate-500 font-semibold uppercase tracking-wider mt-0.5">Structural Analysis Suite</p>
             </div>
           </div>
-          <div className="flex items-center gap-4 text-sm text-slate-500">
-             <span className="hidden md:inline">v2.0.0</span>
-             <a href="#" className="hover:text-blue-600 transition-colors">Help</a>
+          <div className="flex items-center gap-3">
+             <button 
+                onClick={handleReset}
+                className="text-sm text-slate-500 hover:text-red-600 hover:bg-red-50 px-3 py-1.5 rounded-lg transition-colors flex items-center gap-2"
+             >
+                <RotateCcw size={14} /> Reset
+             </button>
+             <div className="h-4 w-px bg-slate-200 hidden md:block"></div>
+             <a href="#" className="text-sm text-slate-500 hover:text-blue-600 transition-colors hidden md:block">Help</a>
           </div>
         </div>
       </header>
@@ -173,12 +194,14 @@ const App: React.FC = () => {
                   <ArrowRight size={14} />
                </div>
             </div>
-            <div className="p-4 bg-slate-50/50 rounded-b-xl">
-               <BeamVisualizer 
-                  state={beamState} 
-                  onSelectLoad={setSelectedLoadId} 
-                  selectedLoadId={selectedLoadId} 
-               />
+            <div className="p-4 bg-slate-50/50 rounded-b-xl overflow-x-auto">
+               <div className="min-w-[600px]">
+                   <BeamVisualizer 
+                      state={beamState} 
+                      onSelectLoad={setSelectedLoadId} 
+                      selectedLoadId={selectedLoadId} 
+                   />
+               </div>
             </div>
           </section>
 
